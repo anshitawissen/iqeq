@@ -1,0 +1,10 @@
+package com.iqeq.enums;
+
+public enum DocumentStatus {
+	PENDING_EXTRACTION,
+	IN_PROGRESS,
+	PROCESSED,
+	PENDING_MANUAL_QA,
+	PENDING_VALIDATION,
+	UPLOADED
+}

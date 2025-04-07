@@ -1,4 +1,4 @@
-package com.iqeq.iqeq;
+package com.iqeq;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
