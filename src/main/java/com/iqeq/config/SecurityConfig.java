@@ -33,7 +33,7 @@ public class SecurityConfig {
     protected static final String[] WHITE_LIST_URL = {"/api/v1/auth/**", "/v2/api-docs", "/v3/api-docs",
             "/v3/api-docs/**", "/swagger-resources", "/swagger-resources/**", "/configuration/ui",
             "/configuration/security", "/swagger-ui/**", "/webjars/**", "/swagger-ui.html", "/utils/health-check",
-            "/search/documents", "/documents/status-count"};
+            "/search/documents", "/documents/status-count",  "/documents/upload", "/documents/download/**"};
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtAuthenticationFilter jwtAuthFilter,

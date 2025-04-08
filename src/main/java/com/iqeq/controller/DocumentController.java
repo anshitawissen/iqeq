@@ -1,12 +1,12 @@
 package com.iqeq.controller;
 
-import com.iqeq.dto.DocumentUploadRequestDto;
-import com.iqeq.dto.FileStatusResponseDto;
+import com.iqeq.dto.*;
 import com.iqeq.dto.common.Response;
 import com.iqeq.dto.common.SearchRequestDto;
 import com.iqeq.exception.CustomException;
 import com.iqeq.model.Priority;
 import com.iqeq.service.DocumentService;
+import com.iqeq.service.JobService;
 import com.iqeq.service.PriorityService;
 import com.iqeq.util.CommonConstants;
 import jakarta.validation.Valid;
@@ -19,6 +19,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Set;
 
@@ -30,6 +31,7 @@ public class DocumentController extends BaseController {
     private final DocumentService documentService;
 
     private final PriorityService priorityService;
+    private final JobService jobService;
 
     @GetMapping("/search/documents")
     public ResponseEntity<Response> getDocumentsByType(@ModelAttribute SearchRequestDto searchRequestDto) throws CustomException {
@@ -70,12 +72,14 @@ public class DocumentController extends BaseController {
     }
 
     @PostMapping(value = "/documents/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Response> uploadDocuments(
-            @Valid @ModelAttribute DocumentUploadRequestDto documentUploadDTO) throws CustomException {
-        Priority priority = priorityService.getPriorityByLabel(documentUploadDTO.getPriority());
-        documentUploadDTO.setPriority(priority.getLabel());
-        List<FileStatusResponseDto> statuses = documentService.uploadDocuments(documentUploadDTO);
-        return buildResponse(HttpStatus.OK, "Upload completed", statuses);
+    public ResponseEntity<UploadResponseDto> uploadDocumentsAsync(@ModelAttribute JobUploadRequestDto request) throws CustomException {
+        String jobId = jobService.upload(request);
+        return ResponseEntity.ok(new UploadResponseDto("WIP", "Extraction started", jobId));
     }
+    @GetMapping("/documents/download/{jobId}")
+    public ResponseEntity<Resource> downloadFile(@PathVariable String jobId) throws IOException {
+        return jobService.downloadFile(jobId);
+    }
+
 
 }
