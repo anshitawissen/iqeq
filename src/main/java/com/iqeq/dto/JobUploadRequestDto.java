@@ -11,7 +11,7 @@ public class JobUploadRequestDto {
     private String documentName;
 
     @NotNull
-    private String invoiceType;
+    private String documentType;
 
     @NotNull
     private String priority;

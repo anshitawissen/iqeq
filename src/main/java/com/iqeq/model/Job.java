@@ -15,7 +15,7 @@ public class Job {
     private String jobId;
 
     private String documentName;
-    private String invoiceType;
+    private String documentType;
     private String priority;
 
     private String status; // WIP, COMPLETED, FAILED

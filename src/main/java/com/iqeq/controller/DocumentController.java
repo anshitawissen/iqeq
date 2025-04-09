@@ -77,8 +77,8 @@ public class DocumentController extends BaseController {
         return ResponseEntity.ok(new UploadResponseDto("WIP", "Extraction started", jobId));
     }
     @GetMapping("/documents/download/{jobId}")
-    public ResponseEntity<Resource> downloadFile(@PathVariable String jobId) throws IOException {
-        return jobService.downloadFile(jobId);
+    public ResponseEntity<FileWithExcelResponse> downloadFile(@PathVariable String jobId) throws IOException {
+        return jobService.downloadFileWithExcel(jobId);
     }
 
 
