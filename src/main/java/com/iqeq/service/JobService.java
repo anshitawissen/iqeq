@@ -26,7 +26,9 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 @RequiredArgsConstructor
@@ -154,34 +156,37 @@ public class JobService {
             if (session != null) session.disconnect();
         }
 
-        List<List<String>> excelData = new ArrayList<>();
+        List<Map<String, String>> excelData = new ArrayList<>();
 
         try (FileInputStream fis = new FileInputStream(excelTemp.toFile());
              Workbook workbook = WorkbookFactory.create(fis)) {
 
             Sheet sheet = workbook.getSheetAt(0);
+            List<String> headers = new ArrayList<>();
 
-            for (Row row : sheet) {
-                List<String> rowData = new ArrayList<>();
-                boolean isRowEmpty = true;
+            for (int rowIndex = 0; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+                Row row = sheet.getRow(rowIndex);
+                if (row == null) continue;
 
-                for (Cell cell : row) {
-                    String value = switch (cell.getCellType()) {
-                        case STRING -> cell.getStringCellValue();
-                        case _NONE -> null;
-                        case NUMERIC -> String.valueOf(cell.getNumericCellValue());
-                        case BOOLEAN -> String.valueOf(cell.getBooleanCellValue());
-                        case FORMULA -> cell.getCellFormula();
-                        case BLANK -> "";
-                        case ERROR -> null;
-                    };
+                if (rowIndex == 0) {
+                    // First row as headers
+                    for (Cell cell : row) {
+                        headers.add(getCellValue(cell));
+                    }
+                } else {
+                    Map<String, String> rowMap = new LinkedHashMap<>();
+                    boolean isRowEmpty = true;
 
-                    if (!value.isBlank()) isRowEmpty = false;
-                    rowData.add(value);
-                }
+                    for (int i = 0; i < headers.size(); i++) {
+                        Cell cell = row.getCell(i);
+                        String value = getCellValue(cell);
+                        if (value != null && !value.isBlank()) isRowEmpty = false;
+                        rowMap.put(headers.get(i), value);
+                    }
 
-                if (!isRowEmpty) {
-                    excelData.add(rowData);
+                    if (!isRowEmpty) {
+                        excelData.add(rowMap);
+                    }
                 }
             }
         } catch (Exception e) {
@@ -190,13 +195,20 @@ public class JobService {
             Files.deleteIfExists(excelTemp);
         }
 
-        FileWithExcelResponse response = new FileWithExcelResponse(
-                jobId,
-                excelData
-        );
-
+        FileWithExcelResponse response = new FileWithExcelResponse(jobId, excelData);
         return ResponseEntity.ok(response);
     }
+    private String getCellValue(Cell cell) {
+        if (cell == null) return "";
+        return switch (cell.getCellType()) {
+            case STRING -> cell.getStringCellValue();
+            case NUMERIC -> String.valueOf(cell.getNumericCellValue());
+            case BOOLEAN -> String.valueOf(cell.getBooleanCellValue());
+            case FORMULA -> cell.getCellFormula();
+            case BLANK, _NONE, ERROR -> "";
+        };
+    }
+
 
 
 }
