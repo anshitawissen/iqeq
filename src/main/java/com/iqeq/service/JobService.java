@@ -77,17 +77,11 @@ public class JobService {
             }
             System.out.println("Pdf file is created successfully");
             String path = callWorkstationApi(remoteDir + "/" + jobId + ".pdf");
+            System.out.println("Path "+path);
             if(path != null) {
                 Job job = jobRepository.findById(jobId).orElseThrow();
                 job.setStatus("COMPLETED");
                 job.setResult("Success");
-                job.setUpdatedAt(LocalDateTime.now());
-                jobRepository.save(job);
-            }
-            else{
-                Job job = jobRepository.findById(jobId).orElseThrow();
-                job.setStatus("FAILED");
-                job.setResult("Workstation api error");
                 job.setUpdatedAt(LocalDateTime.now());
                 jobRepository.save(job);
             }

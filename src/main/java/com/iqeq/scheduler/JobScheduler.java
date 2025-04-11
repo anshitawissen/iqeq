@@ -37,6 +37,7 @@ public class JobScheduler {
 
     public void markJobAsCompleted(String jobId) {
         Job job = jobRepository.findById(jobId).orElseThrow();
+        System.out.println("Job is marked completed for "+jobId);
         job.setStatus("COMPLETED");
         job.setResult("Success");
         job.setUpdatedAt(LocalDateTime.now());
