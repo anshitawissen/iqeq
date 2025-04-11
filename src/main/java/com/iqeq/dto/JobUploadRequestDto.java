@@ -18,7 +18,5 @@ public class JobUploadRequestDto {
 
     @NotNull
     private MultipartFile file;
-
-    // Getters and setters
 }
 

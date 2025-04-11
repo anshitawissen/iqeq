@@ -7,28 +7,19 @@ import com.iqeq.repository.JobRepository;
 import lombok.RequiredArgsConstructor;
 import com.jcraft.jsch.*;
 import org.apache.poi.ss.usermodel.*;
-import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.core.io.Resource;
-import org.springframework.core.io.UrlResource;
 
-
-import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
 @RequiredArgsConstructor
@@ -50,11 +41,8 @@ public class JobService {
         job.setUpdatedAt(LocalDateTime.now());
         jobRepository.save(job);
         try {
-            // Save to temp file before starting async
             Path tempFile = Files.createTempFile(jobId, ".pdf");
             request.getFile().transferTo(tempFile.toFile());
-
-            // Async file transfer
             CompletableFuture.runAsync(() -> handleUploadAndSave(jobId, tempFile));
         } catch (IOException e) {
             job.setStatus("FAILED");
@@ -69,40 +57,40 @@ public class JobService {
     public void handleUploadAndSave(String jobId, Path filePath) {
         Session session = null;
         ChannelSftp sftpChannel = null;
-
         try {
-            // Setup SSH connection
             JSch jsch = new JSch();
-            session = jsch.getSession("iqeq", "10.221.162.5", 22);
+            session = jsch.getSession("iqeq", "10.221.162.2", 22);
             session.setPassword("Wissen@123");
             session.setConfig("StrictHostKeyChecking", "no");
             session.connect();
-
             sftpChannel = (ChannelSftp) session.openChannel("sftp");
             sftpChannel.connect();
-
-            // Create remote directory
-            String remoteDir = "/home/iqeq/iqeq_storage/" + jobId;
+            String remoteDir = "/shared_disk/iqeq/" + jobId;
             try {
                 sftpChannel.mkdir(remoteDir);
             } catch (SftpException e) {
-                // Folder may already exist
                 if (e.id != ChannelSftp.SSH_FX_FAILURE) throw e;
             }
-
             sftpChannel.cd(remoteDir);
-
-            // Upload file using try-with-resources to ensure file is closed
             try (FileInputStream fis = new FileInputStream(filePath.toFile())) {
                 sftpChannel.put(fis, jobId + ".pdf");
             }
-
-            // Update job status
-            Job job = jobRepository.findById(jobId).orElseThrow();
-            job.setStatus("COMPLETED");
-            job.setResult("Success");
-            job.setUpdatedAt(LocalDateTime.now());
-            jobRepository.save(job);
+            System.out.println("Pdf file is created successfully");
+            String path = callWorkstationApi(remoteDir + "/" + jobId + ".pdf");
+            if(path != null) {
+                Job job = jobRepository.findById(jobId).orElseThrow();
+                job.setStatus("COMPLETED");
+                job.setResult("Success");
+                job.setUpdatedAt(LocalDateTime.now());
+                jobRepository.save(job);
+            }
+            else{
+                Job job = jobRepository.findById(jobId).orElseThrow();
+                job.setStatus("FAILED");
+                job.setResult("Workstation api error");
+                job.setUpdatedAt(LocalDateTime.now());
+                jobRepository.save(job);
+            }
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -112,7 +100,6 @@ public class JobService {
             job.setUpdatedAt(LocalDateTime.now());
             jobRepository.save(job);
         } finally {
-            // Always attempt file cleanup at the end
             try {
                 Files.deleteIfExists(filePath);
             } catch (IOException ex) {
@@ -124,6 +111,49 @@ public class JobService {
         }
     }
 
+    private String callWorkstationApi(String filePath) {
+        try {
+            RestTemplate restTemplate = new RestTemplate();
+            String uploadApiUrl = "http://10.221.162.2:7061/upload";
+            MultiValueMap<String, Object> uploadBody = new LinkedMultiValueMap<>();
+            System.out.println("filePath "+filePath);
+            uploadBody.add("path", filePath);
+            HttpHeaders uploadHeaders = new HttpHeaders();
+            uploadHeaders.setContentType(MediaType.MULTIPART_FORM_DATA);
+            HttpEntity<MultiValueMap<String, Object>> uploadRequest = new HttpEntity<>(uploadBody, uploadHeaders);
+            ResponseEntity<Map> uploadResponse = restTemplate.postForEntity(uploadApiUrl, uploadRequest, Map.class);
+            if (!uploadResponse.getStatusCode().is2xxSuccessful()) {
+                throw new RuntimeException("Workstation upload API call failed: " + uploadResponse.getStatusCode());
+            }
+            Map<String, Object> uploadResponseBody = uploadResponse.getBody();
+            System.out.println("Upload done");
+            if (uploadResponseBody != null && uploadResponseBody.containsKey("saved_json_path")) {
+                String jsonPath = uploadResponseBody.get("saved_json_path").toString();
+                System.out.println("JSON saved at: " + jsonPath);
+                String downloadApiUrl = "http://10.221.162.2:7018/download";
+                Map<String, String> downloadBody = new HashMap<>();
+                downloadBody.put("path", jsonPath);
+                HttpHeaders downloadHeaders = new HttpHeaders();
+                downloadHeaders.setContentType(MediaType.APPLICATION_JSON);
+                HttpEntity<Map<String, String>> downloadRequest = new HttpEntity<>(downloadBody, downloadHeaders);
+                ResponseEntity<Map> downloadResponse = restTemplate.postForEntity(downloadApiUrl, downloadRequest, Map.class);
+                if (!downloadResponse.getStatusCode().is2xxSuccessful()) {
+                    throw new RuntimeException("Workstation download API call failed: " + downloadResponse.getStatusCode());
+                }
+                Map<String, Object> downloadResponseBody = downloadResponse.getBody();
+                if (downloadResponseBody != null && downloadResponseBody.containsKey("saved_json_path")) {
+                    String xlsxPath = downloadResponseBody.get("saved_json_path").toString();
+                    System.out.println("Excel saved at: " + xlsxPath);
+                    return xlsxPath;
+                }
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Error in workstation API chain: " + e.getMessage());
+        }
+        return null;
+    }
+
+
     public ResponseEntity<FileWithExcelResponse> downloadFileWithExcel(String jobId) throws IOException {
         Job job = jobRepository.findById(jobId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Job not found"));
@@ -132,7 +162,7 @@ public class JobService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "File not ready for download");
         }
 
-        String remoteDir = "/home/iqeq/iqeq_storage/" + jobId + "/";
+        String remoteDir = "/shared_disk/iqeq/" + jobId + "/";
         Path excelTemp = Files.createTempFile(jobId + "_excel", ".xlsx");
 
         Session session = null;
@@ -140,7 +170,7 @@ public class JobService {
 
         try {
             JSch jsch = new JSch();
-            session = jsch.getSession("iqeq", "10.221.162.5", 22);
+            session = jsch.getSession("iqeq", "10.221.162.2", 22);
             session.setPassword("Wissen@123");
             session.setConfig("StrictHostKeyChecking", "no");
             session.connect();
