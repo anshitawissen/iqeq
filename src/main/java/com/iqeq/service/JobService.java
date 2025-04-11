@@ -153,7 +153,10 @@ public class JobService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Job not found"));
 
         if (!"COMPLETED".equalsIgnoreCase(job.getStatus())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "File not ready for download");
+            return ResponseEntity.ok()
+                    .body(new FileWithExcelResponse(jobId, List.of(
+                            Map.of("message", "File not ready for download")
+                    )));
         }
 
         String remoteDir = "/shared_disk/iqeq/" + jobId + "/";
