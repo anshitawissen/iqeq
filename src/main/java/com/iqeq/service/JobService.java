@@ -7,6 +7,8 @@ import com.iqeq.repository.JobRepository;
 import lombok.RequiredArgsConstructor;
 import com.jcraft.jsch.*;
 import org.apache.poi.ss.usermodel.*;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.Resource;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
@@ -237,6 +239,46 @@ public class JobService {
     }
 
 
+    public ResponseEntity<Resource> downloadExcelFile(String jobId) throws IOException {
+        Job job = jobRepository.findById(jobId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Job not found"));
 
+        if (!"COMPLETED".equalsIgnoreCase(job.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "File not ready for download");
+        }
+
+        String remoteDir = "/shared_disk/iqeq/" + jobId + "/";
+        Path excelTemp = Files.createTempFile(jobId + "_excel", ".xlsx");
+
+        Session session = null;
+        ChannelSftp sftpChannel = null;
+
+        try {
+            JSch jsch = new JSch();
+            session = jsch.getSession("iqeq", "10.221.162.2", 22);
+            session.setPassword("Wissen@123");
+            session.setConfig("StrictHostKeyChecking", "no");
+            session.connect();
+
+            sftpChannel = (ChannelSftp) session.openChannel("sftp");
+            sftpChannel.connect();
+            sftpChannel.get(remoteDir + jobId + ".xlsx", excelTemp.toString());
+
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to download Excel file: " + e.getMessage());
+        } finally {
+            if (sftpChannel != null) sftpChannel.disconnect();
+            if (session != null) session.disconnect();
+        }
+
+        ByteArrayResource resource = new ByteArrayResource(Files.readAllBytes(excelTemp));
+        String fileName = jobId + ".xlsx";
+
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + fileName + "\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .contentLength(resource.contentLength())
+                .body(resource);
+    }
 }
 

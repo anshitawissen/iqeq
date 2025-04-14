@@ -80,6 +80,9 @@ public class DocumentController extends BaseController {
     public ResponseEntity<FileWithExcelResponse> downloadFile(@PathVariable String jobId) throws IOException {
         return jobService.downloadFileWithExcel(jobId);
     }
-
+    @GetMapping("/documents/download/excel/{jobId}")
+    public ResponseEntity<Resource> downloadExcelFile(@PathVariable String jobId) throws IOException {
+        return jobService.downloadExcelFile(jobId);
+    }
 
 }
