@@ -1,12 +1,15 @@
 package com.iqeq.service;
 
+import com.iqeq.config.RabbitMQConfigs;
 import com.iqeq.dto.FileWithExcelResponse;
+import com.iqeq.dto.JobMessage;
 import com.iqeq.dto.JobUploadRequestDto;
 import com.iqeq.model.Job;
 import com.iqeq.repository.JobRepository;
 import lombok.RequiredArgsConstructor;
 import com.jcraft.jsch.*;
 import org.apache.poi.ss.usermodel.*;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.*;
@@ -29,6 +32,7 @@ import java.util.concurrent.CompletableFuture;
 public class JobService {
 
     private final JobRepository jobRepository;
+    private final RabbitTemplate rabbitTemplate;
 
     public String upload(JobUploadRequestDto request) {
         String jobId = request.getDocumentName() + "_" + request.getDocumentType() + "_" + request.getPriority();
@@ -45,7 +49,9 @@ public class JobService {
         try {
             Path tempFile = Files.createTempFile(jobId, ".pdf");
             request.getFile().transferTo(tempFile.toFile());
-            CompletableFuture.runAsync(() -> handleUploadAndSave(jobId, tempFile));
+            JobMessage jm = new JobMessage(jobId, tempFile.toString());
+            rabbitTemplate.convertAndSend(RabbitMQConfigs.QUEUE_NAME, jm);
+
         } catch (IOException e) {
             job.setStatus("FAILED");
             job.setResult("Failed to save file: " + e.getMessage());
