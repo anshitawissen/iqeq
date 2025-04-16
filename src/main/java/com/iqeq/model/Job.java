@@ -1,8 +1,7 @@
 package com.iqeq.model;
 
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
+import com.iqeq.enums.JobStatus;
+import jakarta.persistence.*;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -10,19 +9,25 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "job")
 public class Job {
-
     @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(unique = true)
     private String jobId;
 
     private String documentName;
+
     private String documentType;
+
     private String priority;
 
-    private String status; // WIP, COMPLETED, FAILED
-    private String result; // In progress, Success, or Failure reason
+    @Enumerated(EnumType.STRING)
+    private JobStatus status;
+
+    private String result;
 
     private LocalDateTime createdAt;
-    private LocalDateTime updatedAt;
 
-    // Getters and Setters
+    private LocalDateTime updatedAt;
 }

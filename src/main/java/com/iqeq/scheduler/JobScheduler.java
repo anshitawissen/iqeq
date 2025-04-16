@@ -1,5 +1,6 @@
 package com.iqeq.scheduler;
 
+import com.iqeq.enums.JobStatus;
 import com.iqeq.model.Job;
 import com.iqeq.repository.JobRepository;
 import com.jcraft.jsch.ChannelSftp;
@@ -15,13 +16,10 @@ import java.util.List;
 @RequiredArgsConstructor
 @Component
 public class JobScheduler {
-
     private final JobRepository jobRepository;
-
     @Scheduled(fixedRate = 5000)
     public void processPendingJobs() {
-        List<Job> pendingJobs = jobRepository.findAllByStatus("WIP");
-
+        List<Job> pendingJobs = jobRepository.findAllByStatus(JobStatus.EXTRACTION_WIP);
         for (Job job : pendingJobs) {
             try {
                 if (isFilePresentInWorkstation(job.getJobId())) {
@@ -34,40 +32,32 @@ public class JobScheduler {
             }
         }
     }
-
     public void markJobAsCompleted(String jobId) {
-        Job job = jobRepository.findById(jobId).orElseThrow();
+        Job job = jobRepository.findByJobId(jobId).orElseThrow();
         System.out.println("Job is marked completed for "+jobId);
-        job.setStatus("COMPLETED");
+        job.setStatus(JobStatus.EXPORT_READY);
         job.setResult("Success");
         job.setUpdatedAt(LocalDateTime.now());
         jobRepository.save(job);
     }
-
     private boolean isFilePresentInWorkstation(String jobId) {
         Session session = null;
         ChannelSftp sftpChannel = null;
-
         try {
             JSch jsch = new JSch();
             session = jsch.getSession("iqeq", "10.221.162.2", 22);
             session.setPassword("Wissen@123");
             session.setConfig("StrictHostKeyChecking", "no");
             session.connect();
-
             sftpChannel = (ChannelSftp) session.openChannel("sftp");
             sftpChannel.connect();
-
             String remoteFilePath = "/shared_disk/iqeq/" + jobId + "/" + jobId + ".xlsx";
-
-            // Check file existence
             try {
                 sftpChannel.stat(remoteFilePath);
-                return true; // file exists
+                return true;
             } catch (Exception e) {
-                return false; // file does not exist
+                return false;
             }
-
         } catch (Exception e) {
             System.err.println("Failed to check file in workstation: " + e.getMessage());
             return false;

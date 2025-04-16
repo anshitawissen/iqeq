@@ -15,8 +15,6 @@ import java.util.Map;
 @Component
 public class DocumentUploadListener {
 
-    private final JobRepository jobRepository;
-
     private final JobService jobService;
 
     @RabbitListener(queues = RabbitMQConfigs.QUEUE_NAME, concurrency = "3")

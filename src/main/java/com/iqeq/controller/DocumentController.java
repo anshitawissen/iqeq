@@ -9,6 +9,7 @@ import com.iqeq.service.DocumentService;
 import com.iqeq.service.JobService;
 import com.iqeq.service.PriorityService;
 import com.iqeq.util.CommonConstants;
+import com.iqeq.util.QueueManagerService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -29,6 +30,7 @@ import java.util.Set;
 public class DocumentController extends BaseController {
 
     private final DocumentService documentService;
+    private final QueueManagerService queueManagerService;
 
     private final PriorityService priorityService;
     private final JobService jobService;
@@ -74,15 +76,21 @@ public class DocumentController extends BaseController {
     @PostMapping(value = "/documents/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<UploadResponseDto> uploadDocumentsAsync(@ModelAttribute JobUploadRequestDto request) throws CustomException {
         String jobId = jobService.upload(request);
-        return ResponseEntity.ok(new UploadResponseDto("WIP", "Extraction started", jobId));
+        return ResponseEntity.ok(new UploadResponseDto("EXTRACTION_WIP", "Extraction started", jobId));
     }
     @GetMapping("/documents/download/{jobId}")
-    public ResponseEntity<FileWithExcelResponse> downloadFile(@PathVariable String jobId) throws IOException {
-        return jobService.downloadFileWithExcel(jobId);
+    public ResponseEntity<FileWithExcelResponse> downloadJsonFile(@PathVariable String jobId) throws IOException {
+        return jobService.downloadJsonFile(jobId);
     }
     @GetMapping("/documents/download/excel/{jobId}")
     public ResponseEntity<Resource> downloadExcelFile(@PathVariable String jobId) throws IOException {
         return jobService.downloadExcelFile(jobId);
     }
 
+
+    @PostMapping("/queue/purge")
+    public String purgeQueue() {
+        queueManagerService.purgeUploadQueue();
+        return "Queue purged successfully!";
+    }
 }

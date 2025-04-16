@@ -4,6 +4,7 @@ import com.iqeq.config.RabbitMQConfigs;
 import com.iqeq.dto.FileWithExcelResponse;
 import com.iqeq.dto.JobMessage;
 import com.iqeq.dto.JobUploadRequestDto;
+import com.iqeq.enums.JobStatus;
 import com.iqeq.model.Job;
 import com.iqeq.repository.JobRepository;
 import lombok.RequiredArgsConstructor;
@@ -23,9 +24,9 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 
 @RequiredArgsConstructor
 @Service
@@ -35,13 +36,14 @@ public class JobService {
     private final RabbitTemplate rabbitTemplate;
 
     public String upload(JobUploadRequestDto request) {
-        String jobId = request.getDocumentName() + "_" + request.getDocumentType() + "_" + request.getPriority();
+        String jobId = request.getDocumentName() + "_" + request.getDocumentType() + "_" + request.getPriority()
+                + "_" + System.currentTimeMillis();
         Job job = new Job();
         job.setJobId(jobId);
         job.setDocumentName(request.getDocumentName());
         job.setDocumentType(request.getDocumentType());
         job.setPriority(request.getPriority());
-        job.setStatus("WIP");
+        job.setStatus(JobStatus.UPLOADED);
         job.setResult("In progress");
         job.setCreatedAt(LocalDateTime.now());
         job.setUpdatedAt(LocalDateTime.now());
@@ -50,10 +52,13 @@ public class JobService {
             Path tempFile = Files.createTempFile(jobId, ".pdf");
             request.getFile().transferTo(tempFile.toFile());
             JobMessage jm = new JobMessage(jobId, tempFile.toString());
+            job.setStatus(JobStatus.PROCESSING);
+            job.setUpdatedAt(LocalDateTime.now());
+            jobRepository.save(job);
             rabbitTemplate.convertAndSend(RabbitMQConfigs.QUEUE_NAME, jm);
 
         } catch (IOException e) {
-            job.setStatus("FAILED");
+            job.setStatus(JobStatus.FAILED);
             job.setResult("Failed to save file: " + e.getMessage());
             job.setUpdatedAt(LocalDateTime.now());
             jobRepository.save(job);
@@ -83,12 +88,15 @@ public class JobService {
             try (FileInputStream fis = new FileInputStream(filePath.toFile())) {
                 sftpChannel.put(fis, jobId + ".pdf");
             }
-            System.out.println("Pdf file is created successfully");
+            Job job = jobRepository.findByJobId(jobId).orElseThrow();
+            job.setStatus(JobStatus.EXTRACTION_WIP);
+            job.setUpdatedAt(LocalDateTime.now());
+            jobRepository.save(job);
+
             String path = callWorkstationApi(remoteDir + "/" + jobId + ".pdf");
-            System.out.println("Path "+path);
-            if(path != null) {
-                Job job = jobRepository.findById(jobId).orElseThrow();
-                job.setStatus("COMPLETED");
+
+            if (path != null) {
+                job.setStatus(JobStatus.EXPORT_READY);
                 job.setResult("Success");
                 job.setUpdatedAt(LocalDateTime.now());
                 jobRepository.save(job);
@@ -96,8 +104,8 @@ public class JobService {
 
         } catch (Exception e) {
             e.printStackTrace();
-            Job job = jobRepository.findById(jobId).orElseThrow();
-            job.setStatus("FAILED");
+            Job job = jobRepository.findByJobId(jobId).orElseThrow();
+            job.setStatus(JobStatus.FAILED);
             job.setResult("Failed due to: " + e.getMessage());
             job.setUpdatedAt(LocalDateTime.now());
             jobRepository.save(job);
@@ -107,7 +115,6 @@ public class JobService {
             } catch (IOException ex) {
                 System.err.println("Failed to delete temp file: " + ex.getMessage());
             }
-
             if (sftpChannel != null) sftpChannel.disconnect();
             if (session != null) session.disconnect();
         }
@@ -116,7 +123,7 @@ public class JobService {
     private String callWorkstationApi(String filePath) {
         try {
             RestTemplate restTemplate = new RestTemplate();
-            String uploadApiUrl = "http://10.221.162.2:7061/upload";
+            String uploadApiUrl = "http://10.221.162.2:7061/structured_chunking_extract";
             MultiValueMap<String, Object> uploadBody = new LinkedMultiValueMap<>();
             System.out.println("filePath "+filePath);
             uploadBody.add("path", filePath);
@@ -132,7 +139,7 @@ public class JobService {
             if (uploadResponseBody != null && uploadResponseBody.containsKey("saved_json_path")) {
                 String jsonPath = uploadResponseBody.get("saved_json_path").toString();
                 System.out.println("JSON saved at: " + jsonPath);
-                String downloadApiUrl = "http://10.221.162.2:7018/download";
+                String downloadApiUrl = "http://10.221.162.2:7018/response_generation";
                 Map<String, String> downloadBody = new HashMap<>();
                 downloadBody.put("path", jsonPath);
                 HttpHeaders downloadHeaders = new HttpHeaders();
@@ -156,55 +163,26 @@ public class JobService {
     }
 
 
-    public ResponseEntity<FileWithExcelResponse> downloadFileWithExcel(String jobId) throws IOException {
-        Job job = jobRepository.findById(jobId)
+    public ResponseEntity<FileWithExcelResponse> downloadJsonFile(String jobId) throws IOException {
+        Job job = jobRepository.findByJobId(jobId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Job not found"));
-
-        if (!"COMPLETED".equalsIgnoreCase(job.getStatus())) {
+        if (job.getStatus() != JobStatus.EXPORT_READY && job.getStatus() != JobStatus.EXPORTED) {
             return ResponseEntity.ok()
                     .body(new FileWithExcelResponse(jobId, List.of(
                             Map.of("message", "File not ready for download")
                     )));
         }
-
-        String remoteDir = "/shared_disk/iqeq/" + jobId + "/";
-        Path excelTemp = Files.createTempFile(jobId + "_excel", ".xlsx");
-
-        Session session = null;
-        ChannelSftp sftpChannel = null;
-
-        try {
-            JSch jsch = new JSch();
-            session = jsch.getSession("iqeq", "10.221.162.2", 22);
-            session.setPassword("Wissen@123");
-            session.setConfig("StrictHostKeyChecking", "no");
-            session.connect();
-
-            sftpChannel = (ChannelSftp) session.openChannel("sftp");
-            sftpChannel.connect();
-            sftpChannel.get(remoteDir + jobId + ".xlsx", excelTemp.toString());
-
-        } catch (Exception e) {
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to download Excel file: " + e.getMessage());
-        } finally {
-            if (sftpChannel != null) sftpChannel.disconnect();
-            if (session != null) session.disconnect();
-        }
-
+        Path excelTemp = fetchFileFromWorkstation(jobId);
         List<Map<String, String>> excelData = new ArrayList<>();
-
         try (FileInputStream fis = new FileInputStream(excelTemp.toFile());
              Workbook workbook = WorkbookFactory.create(fis)) {
-
             Sheet sheet = workbook.getSheetAt(0);
             List<String> headers = new ArrayList<>();
-
             for (int rowIndex = 0; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
                 Row row = sheet.getRow(rowIndex);
                 if (row == null) continue;
 
                 if (rowIndex == 0) {
-                    // First row as headers
                     for (Cell cell : row) {
                         headers.add(getCellValue(cell));
                     }
@@ -229,9 +207,51 @@ public class JobService {
         } finally {
             Files.deleteIfExists(excelTemp);
         }
-
+        job.setStatus(JobStatus.EXPORTED);
+        job.setUpdatedAt(LocalDateTime.now());
+        jobRepository.save(job);
         FileWithExcelResponse response = new FileWithExcelResponse(jobId, excelData);
         return ResponseEntity.ok(response);
+    }
+    public ResponseEntity<Resource> downloadExcelFile(String jobId) throws IOException {
+        Job job = jobRepository.findByJobId(jobId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Job not found"));
+        if (job.getStatus() != JobStatus.EXPORT_READY && job.getStatus() != JobStatus.EXPORTED) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "File not ready for download");
+        }
+        Path excelTemp = fetchFileFromWorkstation(jobId);
+        job.setStatus(JobStatus.EXPORTED);
+        job.setUpdatedAt(LocalDateTime.now());
+        jobRepository.save(job);
+        ByteArrayResource resource = new ByteArrayResource(Files.readAllBytes(excelTemp));
+        String fileName = jobId + ".xlsx";
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + fileName + "\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .contentLength(resource.contentLength())
+                .body(resource);
+    }
+    private Path fetchFileFromWorkstation(String jobId) throws IOException {
+        String remoteDir = "/shared_disk/iqeq/" + jobId + "/";
+        Path excelTemp = Files.createTempFile(jobId + "_excel", ".xlsx");
+        Session session = null;
+        ChannelSftp sftpChannel = null;
+        try {
+            JSch jsch = new JSch();
+            session = jsch.getSession("iqeq", "10.221.162.2", 22);
+            session.setPassword("Wissen@123");
+            session.setConfig("StrictHostKeyChecking", "no");
+            session.connect();
+            sftpChannel = (ChannelSftp) session.openChannel("sftp");
+            sftpChannel.connect();
+            sftpChannel.get(remoteDir + jobId + ".xlsx", excelTemp.toString());
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to download Excel file: " + e.getMessage());
+        } finally {
+            if (sftpChannel != null) sftpChannel.disconnect();
+            if (session != null) session.disconnect();
+        }
+        return excelTemp;
     }
     private String getCellValue(Cell cell) {
         if (cell == null) return "";
@@ -242,49 +262,6 @@ public class JobService {
             case FORMULA -> cell.getCellFormula();
             case BLANK, _NONE, ERROR -> "";
         };
-    }
-
-
-    public ResponseEntity<Resource> downloadExcelFile(String jobId) throws IOException {
-        Job job = jobRepository.findById(jobId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Job not found"));
-
-        if (!"COMPLETED".equalsIgnoreCase(job.getStatus())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "File not ready for download");
-        }
-
-        String remoteDir = "/shared_disk/iqeq/" + jobId + "/";
-        Path excelTemp = Files.createTempFile(jobId + "_excel", ".xlsx");
-
-        Session session = null;
-        ChannelSftp sftpChannel = null;
-
-        try {
-            JSch jsch = new JSch();
-            session = jsch.getSession("iqeq", "10.221.162.2", 22);
-            session.setPassword("Wissen@123");
-            session.setConfig("StrictHostKeyChecking", "no");
-            session.connect();
-
-            sftpChannel = (ChannelSftp) session.openChannel("sftp");
-            sftpChannel.connect();
-            sftpChannel.get(remoteDir + jobId + ".xlsx", excelTemp.toString());
-
-        } catch (Exception e) {
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to download Excel file: " + e.getMessage());
-        } finally {
-            if (sftpChannel != null) sftpChannel.disconnect();
-            if (session != null) session.disconnect();
-        }
-
-        ByteArrayResource resource = new ByteArrayResource(Files.readAllBytes(excelTemp));
-        String fileName = jobId + ".xlsx";
-
-        return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + fileName + "\"")
-                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
-                .contentLength(resource.contentLength())
-                .body(resource);
     }
 }
 
