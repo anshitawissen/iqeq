@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/dashboard")
@@ -19,10 +20,11 @@ public class DashboardController {
         this.dashboardService = dashboardService;
     }
     @GetMapping("/documents")
-    public ResponseEntity<List<DocumentResponseDto>> getDocuments(
+    public ResponseEntity<Map<String, List<DocumentResponseDto>>> getDocuments(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "5") int size) {
-        return ResponseEntity.ok(dashboardService.getDocuments(page, size));
+        return ResponseEntity.ok(dashboardService.getDocumentsGrouped(page, size));
     }
+
 
 }
