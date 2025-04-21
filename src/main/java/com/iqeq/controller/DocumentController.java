@@ -86,8 +86,6 @@ public class DocumentController extends BaseController {
     public ResponseEntity<Resource> downloadExcelFile(@PathVariable String jobId) throws IOException {
         return jobService.downloadExcelFile(jobId);
     }
-
-
     @PostMapping("/queue/purge")
     public String purgeQueue() {
         queueManagerService.purgeUploadQueue();
