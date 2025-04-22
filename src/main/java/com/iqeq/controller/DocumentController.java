@@ -4,6 +4,7 @@ import com.iqeq.dto.*;
 import com.iqeq.dto.common.Response;
 import com.iqeq.dto.common.SearchRequestDto;
 import com.iqeq.exception.CustomException;
+import com.iqeq.model.Job;
 import com.iqeq.model.Priority;
 import com.iqeq.service.DocumentService;
 import com.iqeq.service.JobService;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 @RestController
@@ -91,4 +93,16 @@ public class DocumentController extends BaseController {
         queueManagerService.purgeUploadQueue();
         return "Queue purged successfully!";
     }
+    @GetMapping("/documents/download/complete/{jobId}")
+    public ResponseEntity<JobArtifactResponseDto> getCompleteJobData(@PathVariable String jobId) throws Exception {
+        return jobService.getAllArtifacts(jobId);
+    }
+    @GetMapping("/documents/download/pdf/{jobId}")
+    public ResponseEntity<Resource> downloadPdfFile(@PathVariable String jobId) throws Exception {
+        return jobService.downloadPdfFile(jobId);
+    }
+
+
+
+
 }

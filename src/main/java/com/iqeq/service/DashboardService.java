@@ -36,5 +36,11 @@ public class DashboardService {
         dto.setUpdatedAt(job.getUpdatedAt());
         return dto;
     }
+    public List<DocumentResponseDto> getDocumentsByType(String documentType, int page, int size) {
+        int offset = page * size;
+        List<Job> jobs = jobRepository.findByDocumentTypeWithPagination(documentType, offset, size);
+        return jobs.stream().map(this::mapToDto).collect(Collectors.toList());
+    }
+
 
 }

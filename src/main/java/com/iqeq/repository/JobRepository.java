@@ -22,6 +22,11 @@ public interface JobRepository extends JpaRepository<Job, String> {
     WHERE rn > :offset AND rn <= :offset + :size
     """, nativeQuery = true)
     List<Job> findJobsGroupedByTypeWithPagination(@Param("offset") int offset, @Param("size") int size);
+    @Query(value = "SELECT * FROM job WHERE document_type = :documentType ORDER BY created_at DESC LIMIT :size OFFSET :offset", nativeQuery = true)
+    List<Job> findByDocumentTypeWithPagination(@Param("documentType") String documentType,
+                                               @Param("offset") int offset,
+                                               @Param("size") int size);
+
 
 }
 

@@ -2,6 +2,7 @@ package com.iqeq.service;
 
 import com.iqeq.config.RabbitMQConfigs;
 import com.iqeq.dto.FileWithExcelResponse;
+import com.iqeq.dto.JobArtifactResponseDto;
 import com.iqeq.dto.JobMessage;
 import com.iqeq.dto.JobUploadRequestDto;
 import com.iqeq.enums.JobStatus;
@@ -24,7 +25,6 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -172,7 +172,7 @@ public class JobService {
                             Map.of("message", "File not ready for download")
                     )));
         }
-        Path excelTemp = fetchFileFromWorkstation(jobId);
+        Path excelTemp = fetchFileFromWorkstation(jobId, "xlsx");
         List<Map<String, String>> excelData = new ArrayList<>();
         try (FileInputStream fis = new FileInputStream(excelTemp.toFile());
              Workbook workbook = WorkbookFactory.create(fis)) {
@@ -219,7 +219,7 @@ public class JobService {
         if (job.getStatus() != JobStatus.EXPORT_READY && job.getStatus() != JobStatus.EXPORTED) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "File not ready for download");
         }
-        Path excelTemp = fetchFileFromWorkstation(jobId);
+        Path excelTemp = fetchFileFromWorkstation(jobId, "xlsx");
         job.setStatus(JobStatus.EXPORTED);
         job.setUpdatedAt(LocalDateTime.now());
         jobRepository.save(job);
@@ -231,9 +231,10 @@ public class JobService {
                 .contentLength(resource.contentLength())
                 .body(resource);
     }
-    private Path fetchFileFromWorkstation(String jobId) throws IOException {
+    private Path fetchFileFromWorkstation(String jobId, String extension) throws IOException {
         String remoteDir = "/shared_disk/iqeq/" + jobId + "/";
-        Path excelTemp = Files.createTempFile(jobId + "_excel", ".xlsx");
+        Path tempPath = Files.createTempFile(jobId + "_excel", "." + extension);
+
         Session session = null;
         ChannelSftp sftpChannel = null;
         try {
@@ -242,16 +243,18 @@ public class JobService {
             session.setPassword("Wissen@123");
             session.setConfig("StrictHostKeyChecking", "no");
             session.connect();
+
             sftpChannel = (ChannelSftp) session.openChannel("sftp");
             sftpChannel.connect();
-            sftpChannel.get(remoteDir + jobId + ".xlsx", excelTemp.toString());
+            sftpChannel.get(remoteDir + jobId + "." + extension, tempPath.toString());
+
         } catch (Exception e) {
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to download Excel file: " + e.getMessage());
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to fetch Excel: " + e.getMessage());
         } finally {
             if (sftpChannel != null) sftpChannel.disconnect();
             if (session != null) session.disconnect();
         }
-        return excelTemp;
+        return tempPath;
     }
     private String getCellValue(Cell cell) {
         if (cell == null) return "";
@@ -263,5 +266,122 @@ public class JobService {
             case BLANK, _NONE, ERROR -> "";
         };
     }
+    public ResponseEntity<JobArtifactResponseDto> getAllArtifacts(String jobId) throws IOException {
+        Job job = jobRepository.findByJobId(jobId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Job not found"));
+
+        JobArtifactResponseDto response = new JobArtifactResponseDto();
+        response.setJobId(job.getJobId());
+        response.setDocumentName(job.getDocumentName());
+        response.setDocumentType(job.getDocumentType());
+        response.setPriority(job.getPriority());
+        response.setStatus(job.getStatus().name());
+        response.setResult(job.getResult());
+        response.setCreatedAt(job.getCreatedAt().toString());
+        response.setUpdatedAt(job.getUpdatedAt().toString());
+
+        if (job.getStatus() == JobStatus.EXTRACTION_WIP ||
+                job.getStatus() == JobStatus.EXPORT_READY ||
+                job.getStatus() == JobStatus.EXPORTED) {
+
+            response.setPdfDownloadUrl("/documents/download/pdf/" + jobId);
+        }
+
+        if (job.getStatus() == JobStatus.EXPORT_READY || job.getStatus() == JobStatus.EXPORTED) {
+            Path excelPath = fetchFileFromWorkstation(jobId, "xlsx");
+            response.setExtractedJson(extractJsonFromExcel(excelPath));
+            Files.deleteIfExists(excelPath);
+        }
+
+        return ResponseEntity.ok(response);
+    }
+    public ResponseEntity<Resource> downloadPdfFile(String jobId) throws IOException {
+        Job job = jobRepository.findByJobId(jobId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Job not found"));
+
+        if (job.getStatus() == JobStatus.UPLOADED || job.getStatus() == JobStatus.PROCESSING) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "PDF not available yet");
+        }
+
+        byte[] pdfBytes = downloadFileFromWorkstation(jobId, "pdf");
+        ByteArrayResource resource = new ByteArrayResource(pdfBytes);
+
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + jobId + ".pdf\"")
+                .contentType(MediaType.APPLICATION_PDF)
+                .contentLength(resource.contentLength())
+                .body(resource);
+    }
+
+    private List<Map<String, String>> extractJsonFromExcel(Path excelPath) {
+        List<Map<String, String>> extractedJson = new ArrayList<>();
+
+        try (FileInputStream fis = new FileInputStream(excelPath.toFile());
+             Workbook workbook = WorkbookFactory.create(fis)) {
+
+            Sheet sheet = workbook.getSheetAt(0);
+            List<String> headers = new ArrayList<>();
+
+            for (int rowIndex = 0; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+                Row row = sheet.getRow(rowIndex);
+                if (row == null) continue;
+
+                if (rowIndex == 0) {
+                    for (Cell cell : row) {
+                        headers.add(getCellValue(cell));
+                    }
+                } else {
+                    Map<String, String> rowMap = new LinkedHashMap<>();
+                    boolean isRowEmpty = true;
+
+                    for (int i = 0; i < headers.size(); i++) {
+                        Cell cell = row.getCell(i);
+                        String value = getCellValue(cell);
+                        if (value != null && !value.isBlank()) isRowEmpty = false;
+                        rowMap.put(headers.get(i), value);
+                    }
+
+                    if (!isRowEmpty) {
+                        extractedJson.add(rowMap);
+                    }
+                }
+            }
+
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to extract Excel: " + e.getMessage());
+        }
+
+        return extractedJson;
+    }
+
+    private byte[] downloadFileFromWorkstation(String jobId, String extension) {
+        String remoteDir = "/shared_disk/iqeq/" + jobId + "/";
+        String fileName = jobId + "." + extension;
+        Path tempFile;
+        try {
+            tempFile = Files.createTempFile(jobId + "_" + extension, "." + extension);
+            Session session = null;
+            ChannelSftp sftpChannel = null;
+            try {
+                JSch jsch = new JSch();
+                session = jsch.getSession("iqeq", "10.221.162.2", 22);
+                session.setPassword("Wissen@123");
+                session.setConfig("StrictHostKeyChecking", "no");
+                session.connect();
+
+                sftpChannel = (ChannelSftp) session.openChannel("sftp");
+                sftpChannel.connect();
+                sftpChannel.get(remoteDir + fileName, tempFile.toString());
+            } finally {
+                if (sftpChannel != null) sftpChannel.disconnect();
+                if (session != null) session.disconnect();
+            }
+            return Files.readAllBytes(tempFile);
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to download " + extension + ": " + e.getMessage());
+        }
+    }
+
+
 }
 
